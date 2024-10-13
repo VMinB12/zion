@@ -1,53 +1,61 @@
 package zion
 
-import org.apache.pekko.actor.typed.ActorRef
-import org.apache.pekko.actor.typed.ActorSystem
-import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.util.Random
-import scala.concurrent.Future
-import org.apache.pekko.actor.typed.SpawnProtocol
+import java.util.UUID
 
-object Agent:
+object Agent {
   sealed trait AgentCommand
   final case class UserTask(task: String, replyTo: ActorRef[User.UserCommand])
       extends AgentCommand
-  final case class ToolResult(result: Int, replyTo: ActorRef[User.UserCommand])
-      extends AgentCommand
+  final case class ToolResult(taskId: String, result: Int) extends AgentCommand
 
-  def apply(tool: ActorRef[Tool.ExecuteTool]): Behavior[AgentCommand] =
+  def apply(
+      tool: ActorRef[Tool.ToolCommand],
+      taskToUser: Map[String, ActorRef[User.UserCommand]] = Map.empty): Behavior[AgentCommand] =
     Behaviors.receive { (context, message) =>
       message match {
-        case UserTask(task, replyTo) =>
-          context.log.info("Delegating task to Tool")
-          tool ! Tool.ExecuteTool(task, context.self, replyTo)
-          Behaviors.same
-        case ToolResult(result, replyTo) =>
-          context.log.info(s"Received ToolResult with result: $result")
-          replyTo ! User.Done(s"Direct response to task: $result")
+        case UserTask(task, user) =>
+          val taskId = UUID.randomUUID().toString
+          context.log.info(s"Agent: Delegating task '$task' with taskId '$taskId' to Tool")
+          tool ! Tool.ExecuteTool(taskId, task, context.self)
+          apply(tool, taskToUser + (taskId -> user)) // Update state
+        case ToolResult(taskId, result) =>
+          context.log.info(
+            s"Agent: Received ToolResult for taskId '$taskId' with result: $result")
+          taskToUser.get(taskId) match {
+            case Some(user) =>
+              user ! User.Done(s"Result for task '$taskId': $result")
+              apply(tool, taskToUser - taskId) // Remove entry
+            case None =>
+              context.log.warn(s"Agent: No User found for taskId '$taskId'")
+              Behaviors.same
+          }
+      }
+    }
+}
+
+object Tool {
+  sealed trait ToolCommand
+  final case class ExecuteTool(taskId: String, task: String, replyTo: ActorRef[Agent.ToolResult])
+      extends ToolCommand
+
+  def apply(): Behavior[ToolCommand] =
+    Behaviors.receive { (context, message) =>
+      message match {
+        case ExecuteTool(taskId, task, replyTo) =>
+          // Simulate processing (e.g., calling an LLM)
+          val result = Random.nextInt(100)
+          context.log.info(
+            s"Tool: Processing taskId '$taskId' with task '$task', result: $result")
+          replyTo ! Agent.ToolResult(taskId, result)
           Behaviors.same
       }
     }
+}
 
-object Tool:
-  final case class ExecuteTool(
-      task: String,
-      replyTo: ActorRef[Agent.ToolResult],
-      user: ActorRef[User.UserCommand])
-
-  def apply(): Behavior[ExecuteTool] =
-    Behaviors.receive { (context, message) =>
-      // import context.executionContext
-      // // Simulate asynchronous LLM call
-      // Future {
-      val result = /* Call to LLM API */ Random.nextInt(100)
-      context.log.info(s"Tool processing task: ${message.task} with result: $result")
-      message.replyTo ! Agent.ToolResult(result, message.user)
-      // }
-      Behaviors.same
-    }
-
-object User:
+object User {
   sealed trait UserCommand
   final case class Start(content: String) extends UserCommand
   final case class Done(content: String) extends UserCommand
@@ -56,15 +64,18 @@ object User:
     Behaviors.setup { context =>
       val tool = context.spawn(Tool(), "Tool")
       val agent = context.spawn(Agent(tool), "Agent")
+
       Behaviors.receiveMessage {
         case Start(content) =>
+          context.log.info(s"User: Starting task with content '$content'")
           agent ! Agent.UserTask(content, context.self)
           Behaviors.same
         case Done(content) =>
-          context.log.info(s"Done! ${content}")
+          context.log.info(s"User: Received Done with content '$content'")
           Behaviors.stopped
       }
     }
+}
 
 object AgentQuickstart extends App {
   val system: ActorSystem[User.Start] = ActorSystem(User(), "AgentQuickstart")
