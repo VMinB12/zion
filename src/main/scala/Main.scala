@@ -5,64 +5,68 @@ import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import scala.util.Random
+import scala.concurrent.Future
+import org.apache.pekko.actor.typed.SpawnProtocol
 
 object Agent:
   sealed trait AgentCommand
-  final case class UserTask(task: String) extends AgentCommand
-  final case class ToolResult(result: Int) extends AgentCommand
+  final case class UserTask(task: String, replyTo: ActorRef[User.UserCommand])
+      extends AgentCommand
+  final case class ToolResult(result: Int, replyTo: ActorRef[User.UserCommand])
+      extends AgentCommand
 
-  def apply(): Behavior[AgentCommand] =
-    Behaviors.setup { context =>
-      val tool = context.spawn(Tool(), "tool")
-      val user = context.spawn(User(), "user")
-
-      Behaviors.receiveMessage {
-        case message: UserTask =>
+  def apply(tool: ActorRef[Tool.ExecuteTool]): Behavior[AgentCommand] =
+    Behaviors.receive { (context, message) =>
+      message match {
+        case UserTask(task, replyTo) =>
           context.log.info("Delegating task to Tool")
-          tool ! Tool.ExecuteTool(message.task)
+          tool ! Tool.ExecuteTool(task, context.self, replyTo)
           Behaviors.same
-        case message: ToolResult =>
-          context.log.info(s"Received ToolResult with result: ${message.result}")
-          user ! User.Done(s"Direct response to task: ${message.result}")
+        case ToolResult(result, replyTo) =>
+          context.log.info(s"Received ToolResult with result: $result")
+          replyTo ! User.Done(s"Direct response to task: $result")
           Behaviors.same
       }
     }
 
 object Tool:
-  final case class ExecuteTool(task: String)
+  final case class ExecuteTool(
+      task: String,
+      replyTo: ActorRef[Agent.ToolResult],
+      user: ActorRef[User.UserCommand])
 
   def apply(): Behavior[ExecuteTool] =
-    Behaviors.setup { context =>
-      val agent = context.spawn(Agent(), "agent")
-      Behaviors.receiveMessage { message =>
-        val result = Random.nextInt(100) // Generate a random integer result
-        context.log.info(s"Tool processing task: ${message.task} with result: $result")
-        agent ! Agent.ToolResult(result)
-        Behaviors.same
-      }
+    Behaviors.receive { (context, message) =>
+      // import context.executionContext
+      // // Simulate asynchronous LLM call
+      // Future {
+      val result = /* Call to LLM API */ Random.nextInt(100)
+      context.log.info(s"Tool processing task: ${message.task} with result: $result")
+      message.replyTo ! Agent.ToolResult(result, message.user)
+      // }
+      Behaviors.same
     }
 
 object User:
-
   sealed trait UserCommand
   final case class Start(content: String) extends UserCommand
   final case class Done(content: String) extends UserCommand
 
   def apply(): Behavior[UserCommand] =
     Behaviors.setup { context =>
-      val agent = context.spawn(Agent(), "agent")
-
+      val tool = context.spawn(Tool(), "Tool")
+      val agent = context.spawn(Agent(tool), "Agent")
       Behaviors.receiveMessage {
-        case message: Start =>
-          agent ! Agent.UserTask(message.content)
+        case Start(content) =>
+          agent ! Agent.UserTask(content, context.self)
           Behaviors.same
-        case message: Done =>
-          context.log.info(s"Done! ${message.content}")
+        case Done(content) =>
+          context.log.info(s"Done! ${content}")
           Behaviors.stopped
       }
     }
 
-object AgentQuickstart extends App:
-  val system: ActorSystem[User.UserCommand] = ActorSystem(User(), "AgentQuickstart")
-
+object AgentQuickstart extends App {
+  val system: ActorSystem[User.Start] = ActorSystem(User(), "AgentQuickstart")
   system ! User.Start("Give me back a random integer.")
+}
