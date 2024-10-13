@@ -1,0 +1,40 @@
+# sbt specific files
+target/
+project/
+.metals/
+.bloop/
+.bsp/
+.cache/
+lib_managed/
+src_managed/
+.history
+.cache-main
+.scala_dependencies
+dist/
+tmp/
+out/
+
+# Eclipse specific files
+.classpath
+.project
+.settings/
+
+# IntelliJ IDEA specific files
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# VS Code specific files
+.vscode/
+
+# MacOS specific files
+.DS_Store
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
