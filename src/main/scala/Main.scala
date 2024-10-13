@@ -2,6 +2,9 @@ package zion
 
 import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.AskPattern._
+import scala.concurrent.Future
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Random
 import java.util.UUID
 
@@ -40,16 +43,40 @@ object Tool {
   sealed trait ToolCommand
   final case class ExecuteTool(taskId: String, task: String, replyTo: ActorRef[Agent.ToolResult])
       extends ToolCommand
+  final private case class WrappedResult(
+      taskId: String,
+      result: Int,
+      replyTo: ActorRef[Agent.ToolResult])
+      extends ToolCommand
+  final private case class WrappedFailure(
+      taskId: String,
+      task: String,
+      ex: Throwable,
+      replyTo: ActorRef[Agent.ToolResult])
+      extends ToolCommand
 
   def apply(): Behavior[ToolCommand] =
     Behaviors.receive { (context, message) =>
       message match {
         case ExecuteTool(taskId, task, replyTo) =>
-          // Simulate processing (e.g., calling an LLM)
-          val result = Random.nextInt(100)
-          context.log.info(
-            s"Tool: Processing taskId '$taskId' with task '$task', result: $result")
+          // Simulate asynchronous processing
+          val resultFuture: Future[Int] = Future {
+            // Call to LLM API
+            Random.nextInt(100)
+          }
+          context.pipeToSelf(resultFuture) {
+            case scala.util.Success(result) => WrappedResult(taskId, result, replyTo)
+            case scala.util.Failure(ex) => WrappedFailure(taskId, task, ex, replyTo)
+          }
+          Behaviors.same
+        case WrappedResult(taskId, result, replyTo) =>
+          context.log.info(s"Tool: Completed taskId '$taskId' with result: $result")
           replyTo ! Agent.ToolResult(taskId, result)
+          Behaviors.same
+        case WrappedFailure(taskId, task, ex, replyTo) =>
+          context.log.error(s"Tool: Failed to process taskId '$taskId', retrying...", ex)
+          // Retry the task
+          context.self ! ExecuteTool(taskId, task, replyTo)
           Behaviors.same
       }
     }
