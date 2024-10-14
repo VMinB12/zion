@@ -4,9 +4,9 @@ import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.AskPattern._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Random
 import java.util.UUID
+import scala.concurrent.ExecutionContext
 
 object Agent {
   sealed trait AgentCommand
@@ -59,6 +59,7 @@ object Tool {
     Behaviors.receive { (context, message) =>
       message match {
         case ExecuteTool(taskId, task, replyTo) =>
+          implicit val ec: ExecutionContext = context.executionContext
           // Simulate asynchronous processing
           val resultFuture: Future[Int] = Future {
             // Call to LLM API
